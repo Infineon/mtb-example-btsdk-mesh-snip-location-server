@@ -57,7 +57,6 @@ extern wiced_bt_cfg_settings_t wiced_bt_cfg_settings;
  ******************************************************/
 #define MESH_PID                0x3014
 #define MESH_VID                0x0002
-#define MESH_CACHE_REPLAY_SIZE  0x0008
 
 
 /******************************************************
@@ -77,9 +76,10 @@ static uint32_t mesh_app_proc_rx_cmd(uint16_t opcode, uint8_t *p_data, uint32_t 
 static void mesh_location_server_message_handler(uint8_t element_idx, uint16_t event, void *p_data);
 static void mesh_location_server_global_changed(wiced_bt_mesh_event_t *p_event);
 static void mesh_location_server_local_changed(wiced_bt_mesh_event_t *p_event);
+
 #ifdef HCI_CONTROL
-static void mesh_location_hci_event_send_global_data(wiced_bt_mesh_hci_event_t *p_hci_event, wiced_bt_mesh_location_global_data_t *p_data);
-static void mesh_location_hci_event_send_local_data(wiced_bt_mesh_hci_event_t *p_hci_event, wiced_bt_mesh_location_local_data_t *p_data);
+static void mesh_location_global_hci_event_send_status(uint8_t element_idx, wiced_bt_mesh_location_global_data_t* p_data);
+static void mesh_location_local_hci_event_send_status(uint8_t element_idx, wiced_bt_mesh_location_local_data_t* p_data);
 #endif
 
 /******************************************************
@@ -122,7 +122,6 @@ wiced_bt_mesh_core_config_t  mesh_config =
     .company_id         = MESH_COMPANY_ID_CYPRESS,                  // Company identifier assigned by the Bluetooth SIG
     .product_id         = MESH_PID,                                 // Vendor-assigned product identifier
     .vendor_id          = MESH_VID,                                 // Vendor-assigned product version identifier
-    .replay_cache_size  = MESH_CACHE_REPLAY_SIZE,                   // Number of replay protection entries, i.e. maximum number of mesh devices that can send application messages to this device.
 #if defined(LOW_POWER_NODE) && (LOW_POWER_NODE == 1)
     .features           = WICED_BT_MESH_CORE_FEATURE_BIT_LOW_POWER, // A bit field indicating the device features. In Low Power mode no Relay, no Proxy and no Friend
     .friend_cfg         =                                           // Empty Configuration of the Friend Feature
@@ -219,9 +218,6 @@ void mesh_app_init(wiced_bool_t is_provisioned)
  */
 void mesh_location_server_message_handler(uint8_t element_idx, uint16_t event, void *p_data)
 {
-#if defined HCI_CONTROL
-    wiced_bt_mesh_hci_event_t *p_hci_event;
-#endif
     WICED_BT_TRACE("loc setup evt:%d\n", event);
     switch(event)
     {
@@ -229,11 +225,10 @@ void mesh_location_server_message_handler(uint8_t element_idx, uint16_t event, v
         memcpy(p_data, &app_state.global_data, sizeof(app_state.global_data));
         break;
 
-    case WICED_BT_MESH_LOCATION_GLOBAL_SET:
+    case WICED_BT_MESH_LOCATION_GLOBAL_STATUS:
         memcpy(&app_state.global_data, p_data, sizeof(app_state.global_data));
 #ifdef HCI_CONTROL
-        if ((p_hci_event = wiced_bt_mesh_alloc_hci_event(element_idx)) != NULL)
-            mesh_location_hci_event_send_global_data(p_hci_event, &app_state.global_data);
+        mesh_location_global_hci_event_send_status(element_idx, &app_state.global_data);
 #endif
         break;
 
@@ -241,11 +236,10 @@ void mesh_location_server_message_handler(uint8_t element_idx, uint16_t event, v
         memcpy(p_data, &app_state.local_data, sizeof(app_state.local_data));
         break;
 
-    case WICED_BT_MESH_LOCATION_LOCAL_SET:
+    case WICED_BT_MESH_LOCATION_LOCAL_STATUS:
         memcpy(&app_state.local_data, p_data, sizeof(app_state.local_data));
 #ifdef HCI_CONTROL
-        if ((p_hci_event = wiced_bt_mesh_alloc_hci_event(element_idx)) != NULL)
-            mesh_location_hci_event_send_local_data(p_hci_event, &app_state.local_data);
+        mesh_location_local_hci_event_send_status(element_idx, &app_state.local_data);
 #endif
         break;
     }
@@ -318,11 +312,16 @@ void mesh_location_server_local_changed(wiced_bt_mesh_event_t *p_event)
     wiced_bt_mesh_model_location_server_send(WICED_BT_MESH_LOCATION_LOCAL_STATUS, p_event, &app_state.local_data);
 }
 
+
+
 #ifdef HCI_CONTROL
 /*
- * Send Location Server Global Data Set event over transport
+ * Send Location Status event over transport
  */
-void mesh_location_hci_event_send_global_data(wiced_bt_mesh_hci_event_t *p_hci_event, wiced_bt_mesh_location_global_data_t *p_data)
+void mesh_location_global_hci_event_send_status(uint8_t element_idx, wiced_bt_mesh_location_global_data_t* p_data)
+{
+    wiced_bt_mesh_hci_event_t* p_hci_event = wiced_bt_mesh_alloc_hci_event(element_idx);
+    if (p_hci_event)
 {
     uint8_t *p = p_hci_event->data;
 
@@ -330,13 +329,17 @@ void mesh_location_hci_event_send_global_data(wiced_bt_mesh_hci_event_t *p_hci_e
     UINT32_TO_STREAM(p, p_data->global_longitude);
     UINT16_TO_STREAM(p, p_data->global_altitude);
 
-    mesh_transport_send_data(HCI_CONTROL_MESH_EVENT_LOCATION_GLOBAL_SET, (uint8_t *)p_hci_event, (uint16_t)(p - (uint8_t *)p_hci_event));
+        mesh_transport_send_data(HCI_CONTROL_MESH_EVENT_LOCATION_GLOBAL_STATUS, (uint8_t*)p_hci_event, (uint16_t)(p - (uint8_t*)p_hci_event));
+    }
 }
 
 /*
- * Send Location Server Local Data Set event over transport
+ * Send Location Status event over transport
  */
-void mesh_location_hci_event_send_local_data(wiced_bt_mesh_hci_event_t *p_hci_event, wiced_bt_mesh_location_local_data_t *p_data)
+void mesh_location_local_hci_event_send_status(uint8_t element_idx, wiced_bt_mesh_location_local_data_t* p_data)
+{
+    wiced_bt_mesh_hci_event_t* p_hci_event = wiced_bt_mesh_alloc_hci_event(element_idx);
+    if (p_hci_event)
 {
     uint8_t *p = p_hci_event->data;
 
@@ -348,10 +351,7 @@ void mesh_location_hci_event_send_local_data(wiced_bt_mesh_hci_event_t *p_hci_ev
    UINT8_TO_STREAM(p, p_data->update_time);
    UINT8_TO_STREAM(p, p_data->precision);
 
-   WICED_BT_TRACE("local n:%x e:%x a:%x fl:%x mo:%x up:%x p:%x\n", p_data->local_north, p_data->local_east, p_data->local_altitude,
-           p_data->floor_number, p_data->is_mobile, p_data->update_time, p_data->precision);
-
-   mesh_transport_send_data(HCI_CONTROL_MESH_EVENT_LOCATION_LOCAL_SET, (uint8_t *)p_hci_event, (uint16_t)(p - (uint8_t *)p_hci_event));
+        mesh_transport_send_data(HCI_CONTROL_MESH_EVENT_LOCATION_LOCAL_STATUS, (uint8_t*)p_hci_event, (uint16_t)(p - (uint8_t*)p_hci_event));
+    }
 }
-
 #endif
